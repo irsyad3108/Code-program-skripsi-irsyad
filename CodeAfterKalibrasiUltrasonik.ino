@@ -1,56 +1,53 @@
 /*
  * Program untuk mengukur jarak menggunakan sensor ultrasonik HC-SR04
- * dan menampilkannya di Serial Monitor dengan kalibrasi.
+ * dan menampilkannya di Serial Monitor dengan menerapkan rumus kalibrasi
+ * dari skripsi untuk mengoreksi pembacaan sensor.
  */
 
-// Mendefinisikan pin untuk Trig dan Echo
+// Mendefinisikan pin untuk Trig dan Echo sesuai proyek Anda
 const int trigPin = 26;
 const int echoPin = 27;
 
 // Variabel untuk menyimpan durasi dan jarak
 long durasi;
-float jarak; // Diubah ke float untuk presisi
-float jarakTerkalibrasi; // Variabel baru untuk jarak hasil kalibrasi
+float jarakMentah;        // Variabel untuk jarak mentah sebelum dikoreksi
+float jarakTerkalibrasi;  // Variabel untuk jarak setelah dikoreksi dengan rumus
 
 void setup() {
-  // Mengatur trigPin sebagai OUTPUT dan echoPin sebagai INPUT
+  // Mengatur pin Trig sebagai OUTPUT dan pin Echo sebagai INPUT
   pinMode(trigPin, OUTPUT);
   pinMode(echoPin, INPUT);
   
   // Memulai komunikasi serial pada 9600 baud
   Serial.begin(9600);
-  Serial.println("Pengukuran Jarak dengan Sensor Ultrasonik (Terkalibrasi)");
+  Serial.println("--- Uji Kalibrasi Sensor Ultrasonik HC-SR04 ---");
 }
 
 void loop() {
-  // Membersihkan trigPin sebelum mengirim sinyal
+  // 1. Memicu sensor untuk mengirimkan gelombang suara
   digitalWrite(trigPin, LOW);
   delayMicroseconds(2);
-  
-  // Mengirim sinyal ultrasonik selama 10 mikrodetik
   digitalWrite(trigPin, HIGH);
   delayMicroseconds(10);
   digitalWrite(trigPin, LOW);
   
-  // Membaca durasi pantulan sinyal dari echoPin
+  // 2. Membaca durasi pantulan sinyal dari pin Echo
   durasi = pulseIn(echoPin, HIGH);
   
-  // Menghitung jarak mentah (sebagai 'x' dalam rumus)
-  jarak = durasi * 0.0343 / 2;
+  // 3. Menghitung jarak mentah (ini adalah 'y' dalam rumus)
+  jarakMentah = durasi * 0.0343 / 2;
 
-  // Menerapkan rumus kalibrasi
-  jarakTerkalibrasi = (1.0143 * jarak) + 0.284;
+  // 4. Menerapkan RUMUS TERBALIK untuk mengoreksi dan mendapatkan jarak sebenarnya ('x')
+  // Berdasarkan rumus dari skripsi: y = 1.0143x + 0.284
+  // Maka, x = (y - 0.284) / 1.0143
+  jarakTerkalibrasi = (jarakMentah - 0.284) / 1.0143;
 
-  // Variabel untuk persentase
-  int kosong = 31;
-  int penuh = 6;
-  
-  // Menghitung persentase menggunakan jarak yang sudah dikalibrasi
-  int persentase = map(jarakTerkalibrasi, kosong, penuh, 0, 100);
-
-  // Menampilkan hasil pengukuran yang sudah dikalibrasi ke Serial Monitor
-  Serial.print("Jarak: ");
-  Serial.print(jarakTerkalibrasi); // Menampilkan jarak hasil kalibrasi
+  // 5. Menampilkan kedua hasil ke Serial Monitor untuk perbandingan
+  Serial.print("Jarak Mentah (Sensor): ");
+  Serial.print(jarakMentah);
+  Serial.print(" cm | Jarak Terkalibrasi (Hasil Sebenarnya): ");
+  Serial.print(jarakTerkalibrasi);
   Serial.println(" cm");
-  delay(1000);
+  
+  delay(1000); // Jeda 1 detik agar mudah dibaca
 }
