@@ -3,11 +3,12 @@
 #include <PubSubClient.h>
 #include <ESP32Servo.h>
 #include <Wire.h>
-#include <LiquidCrystal_I2C.h> // libray lcd
+#include <LiquidCrystal_I2C.h>
+
+// Inisialisasi LCD dengan alamat I2C, 20 kolom, dan 4 baris
 LiquidCrystal_I2C lcd(0x27, 20, 4);
 
-
-
+// Definisi Pin
 #define DHTTYPE DHT11
 #define dht_pin 33
 #define PIR 12
@@ -15,143 +16,134 @@ LiquidCrystal_I2C lcd(0x27, 20, 4);
 #define SensorHujan 15
 #define trig 26
 #define echo 27 
-
 #define RelayPompa 5
 #define RelayPompa2 18
+#define servo_pin 2
 
+// Threshold untuk Logika Sistem
+const int soil_dry_threshold_percent = 30; // Siram jika kelembapan di bawah 30%
+const int reservoir_kosong_cm = 25;        // Jarak > 25cm dianggap kosong
+const int reservoir_penuh_cm = 10;         // Jarak < 10cm dianggap penuh
 
-#define IN_TOPIC "IN_ARRASYID"
-#define IN_TOPIC2 "IN_ARRASYID_TOMBOL_POMPA"
-#define IN_TOPIC3 "IN_ARRASYID_TOMBOL_KERAN"
-
-//#define OUT_TOPIC "OUT_ARRASYID"
-
-String StatusR1;
-String StatusP1;
-String StatusPs1;
-String StatusP2;
-
-const int dry = 3700;
-const int mid_dry = 1250;
-const int wet = 125; 
-
-const int kosong = 32;
-const int penuh = 6;
-
-// const char* ssid = "AYONA";
-// const char* password = "Arrasyid21";
-// const char* ssid = "@UPI.EDU WPA";
-// const char* password = "Pendidikan"; 
+// Kredensial Wi-Fi & MQTT
 const char* ssid = "Zuppa";
 const char* password = "Ujang123";
-
 const char* mqtt_server = "broker.hivemq.com";
 
-DHT dht(dht_pin,DHTTYPE);
+// Topik MQTT
+#define IN_TOPIC_PUMP1 "IN_TOMBOL_POMPA1"
+#define IN_TOPIC_PUMP2 "IN_TOMBOL_POMPA2"
+
+// Inisialisasi Objek
+DHT dht(dht_pin, DHTTYPE);
 Servo servo1;
-
-
-
 WiFiClient espClient;
 PubSubClient client(espClient);
+
+// Variabel Global
 unsigned long lastMsg = 0;
-#define MSG_BUFFER_SIZE  (50)
-char msg[MSG_BUFFER_SIZE];
-int value = 0;
-int val = 0;
-int pos = 0;
+String StatusR1 = "N/A";
+String StatusP1 = "Off";
+String StatusPs1 = "N/A";
+String StatusP2 = "Off";
 
 void setup_wifi() {
   delay(10);
-  // We start by connecting to a WiFi network
   Serial.println();
-  Serial.print("Connecting to ");
+  Serial.print("Menyambungkan ke ");
   Serial.println(ssid);
+  lcd.setCursor(0, 0);
+  lcd.print("Connecting WiFi...");
 
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
-
 
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
   }
 
-  randomSeed(micros());
-
-  Serial.println("");
-  Serial.println("WiFi connected");
-  Serial.println("IP address: ");
+  Serial.println("\nWiFi terhubung");
+  Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("WiFi Connected!");
+  delay(2000);
 }
 
 void callback(char* topic, byte* payload, unsigned int length) {
-  Serial.print("Message arrived [");
+  Serial.print("Pesan diterima [");
   Serial.print(topic);
   Serial.print("] ");
+  String message;
   for (int i = 0; i < length; i++) {
+    message += (char)payload[i];
     Serial.print((char)payload[i]);
   }
   Serial.println();
   
-  if((char)payload[0] == 'a'){
-    digitalWrite (RelayPompa2, LOW);
-    client.publish("OUT_ARRASYID_KERAN", "On");
-    Serial.println ("Pompa 2 : On");
-  }else if((char)payload[0] == 'b'){
-    digitalWrite (RelayPompa2, HIGH);
-    client.publish("OUT_ARRASYID_KERAN", "Off");
-    Serial.println ("Pompa 2 : Off");
-  }else if((char)payload[0] == 'p'){
-    digitalWrite(RelayPompa,LOW);
-    client.publish("OUT_ARRASYID_POMPA", "On");
-    Serial.println ("Pompa 1 : On");
-  }else if((char)payload[0] == 'q'){
-    digitalWrite(RelayPompa,HIGH);
-    client.publish("OUT_ARRASYID_POMPA", "Off");
-    Serial.println ("Pompa 1 : Off");
+  String topicStr = topic;
+
+  if (topicStr == IN_TOPIC_PUMP1) {
+    if (message == "ON") {
+      digitalWrite(RelayPompa, LOW); // LOW menyalakan relay
+      client.publish("OUT_ARRASYID_POMPA", "On");
+      Serial.println("Pompa 1 Manual : On");
+    } else if (message == "OFF") {
+      digitalWrite(RelayPompa, HIGH); // HIGH mematikan relay
+      client.publish("OUT_ARRASYID_POMPA", "Off");
+      Serial.println("Pompa 1 Manual : Off");
+    }
+  } else if (topicStr == IN_TOPIC_PUMP2) {
+    if (message == "ON") {
+      digitalWrite(RelayPompa2, LOW);
+      client.publish("OUT_ARRASYID_KERAN", "On");
+      Serial.println("Pompa 2 Manual : On");
+    } else if (message == "OFF") {
+      digitalWrite(RelayPompa2, HIGH);
+      client.publish("OUT_ARRASYID_KERAN", "Off");
+      Serial.println("Pompa 2 Manual : Off");
+    }
   }
 }
 
 void reconnect() {
-  // Loop until we're reconnected
   while (!client.connected()) {
-    Serial.print("Attempting MQTT connection...");
-    // Create a random client ID
-    String clientId = "ESP8266Client-";
+    Serial.print("Mencoba koneksi MQTT...");
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Connecting MQTT...");
+    String clientId = "ESP32Client-";
     clientId += String(random(0xffff), HEX);
-    // Attempt to connect
     if (client.connect(clientId.c_str())) {
-      Serial.println("connected");
-      // Once connected, publish an announcement...
-      client.publish("outTopic", "hello world");
-      // ... and resubscribe
-      client.subscribe(IN_TOPIC);
-      client.subscribe(IN_TOPIC2);
-      client.subscribe(IN_TOPIC3);
+      Serial.println("terhubung");
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("MQTT Connected!");
+      delay(2000);
+      client.subscribe(IN_TOPIC_PUMP1);
+      client.subscribe(IN_TOPIC_PUMP2);
     } else {
-      Serial.print("failed, rc=");
+      Serial.print("gagal, rc=");
       Serial.print(client.state());
-      Serial.println(" try again in 5 seconds");
-      // Wait 5 seconds before retrying
+      Serial.println(" coba lagi dalam 5 detik");
       delay(5000);
     }
   }
 }
 
 void ServoAktif() {
-  // put your main code here, to run repeatedly:
-  for (pos = 0; pos <= 180; pos += 30) { // servo bergerak dari posisi 0 drajat menuju 180 drajat
-    // in steps of 1 degree
-    servo1.write(pos);              // Menyuruh servo bergerak menuju posisi sesuai variabel 'pos'
-    delay(15);                       
+  for (int pos = 0; pos <= 180; pos += 30) {
+    servo1.write(pos);
+    delay(15);
   }
-  for (pos = 180; pos >= 0; pos -= 30) { // servo bergerak dari posisi 0 drajat menuju 180 drajat
-    servo1.write(pos);              // Menyuruh servo bergerak menuju posisi sesuai variabel 'pos'
-    delay(15);                       
+  for (int pos = 180; pos >= 0; pos -= 30) {
+    servo1.write(pos);
+    delay(15);
   }
+  servo1.write(0); // Kembali ke posisi awal
 }
-
 
 void setup() {
   Serial.begin(9600);
@@ -159,189 +151,136 @@ void setup() {
 
   pinMode(PIR, INPUT);
   pinMode(PinSoil, INPUT);
-  pinMode (SensorHujan, INPUT);
-  pinMode(trig, OUTPUT); 
+  pinMode(SensorHujan, INPUT);
+  pinMode(trig, OUTPUT);
   pinMode(echo, INPUT);
-
-  pinMode (RelayPompa, OUTPUT);
+  pinMode(RelayPompa, OUTPUT);
   pinMode(RelayPompa2, OUTPUT);
-  servo1.attach(2);
+  
+  servo1.attach(servo_pin);
 
+  // Inisialisasi LCD
+  lcd.init();
+  lcd.backlight();
+  
+  lcd.setCursor(0, 1);
+  lcd.print("  Smart Irrigation  ");
+  lcd.setCursor(6, 2);
+  lcd.print("System");
+  delay(2000);
+  lcd.clear();
+  
   setup_wifi();
   client.setServer(mqtt_server, 1883);
   client.setCallback(callback);
 
-  digitalWrite (RelayPompa, HIGH);
-  digitalWrite (RelayPompa2, HIGH);
-
-  // --- PERBAIKAN DI SINI ---
-  // Menggunakan init() dan backlight() untuk inisialisasi LCD
-  // yang lebih kompatibel dengan ESP32.
-  lcd.init();
-  lcd.backlight();
-  
-  lcd.setCursor(0,1);
-  lcd.print("  Smart Irrigation  ");
-  lcd.setCursor(8,2);
-  lcd.print("System");
-  delay(2000);
-  lcd.clear();
+  // Kondisi awal relay mati (HIGH)
+  digitalWrite(RelayPompa, HIGH);
+  digitalWrite(RelayPompa2, HIGH);
 }
 
 void loop() {
-  
-  float h = dht.readHumidity();
-  float t = dht.readTemperature();
-
-  int SensorSoil = analogRead(PinSoil); //637-638 272-273
-  int PercentageSensorSoil = map(SensorSoil, wet, dry, 100, 17);
-
-  int DataSensorHujan = digitalRead(SensorHujan);
-
-  val = digitalRead(PIR);
-
-  digitalWrite(trig, LOW); 
-  delayMicroseconds(2); 
-  digitalWrite(trig, HIGH); 
-  delayMicroseconds(10); 
-  digitalWrite(trig, LOW);
-
-  long durasi;
-  float jarak; // Gunakan float untuk presisi
-  durasi = pulseIn(echo, HIGH);
-  jarak = (durasi * 0.0343) / 2; 
-  int PercentageJarak = map(jarak, kosong, penuh, 0, 100);
-  
-  if (!client.connected()) {                                 
+  if (!client.connected()) {
     reconnect();
   }
-  client.loop();                                               
+  client.loop();
 
   unsigned long now = millis();
-  if (now - lastMsg > 4000) {                                  
+  if (now - lastMsg > 4000) {
     lastMsg = now;
-    // Convert the value to a char array
-    char tempString[8];
-    dtostrf(t, 1, 0, tempString);
-    Serial.print("Temperature: ");
-    Serial.println(tempString);
-    lcd.setCursor(0,0);
-    lcd.print("Temp: ");
-    lcd.print(tempString);
-    lcd.print(" C");
-    client.publish("OUT_ARRASYID/SUHU/T", tempString);
     
-    // Convert the value to a char array
-    char humString[8];
-    dtostrf(h, 1, 0, humString);
-    Serial.print("Humidity: ");
-    Serial.println(humString);
-    lcd.setCursor(0,1);
-    lcd.print("Hum: ");
-    lcd.print(humString);
-    client.publish("OUT_ARRASYID/SUHU/H", humString); 
+    // 1. Membaca semua data sensor
+    float h = dht.readHumidity();
+    float t = dht.readTemperature();
+    int nilaiADCTanah = analogRead(PinSoil);
+    bool isRaining = (digitalRead(SensorHujan) == LOW); // LOW berarti hujan
+    bool isMotion = (digitalRead(PIR) == HIGH);
 
+    // Baca sensor ultrasonik (mentah)
+    digitalWrite(trig, LOW);
+    delayMicroseconds(2);
+    digitalWrite(trig, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(trig, LOW);
+    long durasi = pulseIn(echo, HIGH);
+    float jarakMentah = (durasi * 0.0343) / 2;
     
-    Serial.print("Soil Moisture: ");
-    Serial.print(PercentageSensorSoil - 25);
-    Serial.println ("%");
-    lcd.setCursor(0,2);
-    lcd.print("SM: ");
-    lcd.print(PercentageSensorSoil -25);
-    lcd.print ("%");
+    // =========================================================================
+    // **IMPLEMENTASI PERSAMAAN KALIBRASI DARI SKRIPSI **
+    // =========================================================================
+    float kelembapanTanahPersen = (-0.0004 * nilaiADCTanah + 1.1177) * 100.0;
+    float jarakTerkalibrasi = (jarakMentah - 0.284) / 1.0143;
+    // =========================================================================
 
-    if(DataSensorHujan == 1 && SensorSoil >= dry){
-      Serial.println("Rain : No");
-      Serial.println ("Pompa 1 : On");
-      digitalWrite(RelayPompa,LOW);
-      StatusR1 = "No";
-      StatusP1 = "On";
-      client.publish("OUT_ARRASYID_POMPA", "On");
-      client.publish("OUT_ARRASYID_RAIN", "Rain : No");
-    }else if(DataSensorHujan == 1 && SensorSoil <= mid_dry){
-      digitalWrite(RelayPompa,HIGH);
-      Serial.println("Rain : No");
-      Serial.println ("Pompa 1 : Off");
-      StatusR1 = "No";
+    // Pastikan nilai persentase tidak di bawah 0 atau di atas 100
+    if (kelembapanTanahPersen < 0) kelembapanTanahPersen = 0;
+    if (kelembapanTanahPersen > 100) kelembapanTanahPersen = 100;
+
+    // 2. Logika Pengambilan Keputusan
+    
+    // Logika Pompa 1 (Irigasi)
+    if (isRaining) {
+      digitalWrite(RelayPompa, HIGH); // Mati jika hujan
       StatusP1 = "Off";
-      client.publish("OUT_ARRASYID_POMPA", "Off");
-      client.publish("OUT_ARRASYID_RAIN", "No");
-    }else if (DataSensorHujan == 0){
-      Serial.println("Rain : Yes");
-      Serial.println ("Pompa 1 : Off");
-      digitalWrite(RelayPompa,HIGH);
       StatusR1 = "Yes";
-      StatusP1 = "Off";
-      client.publish("OUT_ARRASYID_POMPA", "Off");
-      client.publish("OUT_ARRASYID_RAIN", "Yes");
-    }
-    
-    snprintf (msg, MSG_BUFFER_SIZE, "%i", PercentageSensorSoil - 25);
-    client.publish("OUT_ARRASYID_SOIL", msg);
-
-
-    if (val == HIGH){
-      Serial.println("Pest: Yes");
-      StatusPs1 = "Yes";
-      client.publish("OUT_ARRASYID_PIR", "Yes"); 
-      ServoAktif();
-    }else{
-      servo1.write(0);
-      Serial.println("Pest : No");
-      StatusPs1 = "No";
-      client.publish("OUT_ARRASYID_PIR", "No"); 
-    }
-    
-
-    Serial.print ("Reservoir: ");
-    Serial.print (PercentageJarak);
-    Serial.println ("% ");
-    lcd.setCursor(11,0);
-    lcd.print("WTR :");
-    lcd.print(PercentageJarak);
-    lcd.print("%"); // Menggunakan print bukan println untuk LCD
-
-    
-    lcd.setCursor(0,3);
-    lcd.print("Rain: ");
-    lcd.print(StatusR1);
-    lcd.setCursor(11,2);
-    lcd.print("P1: ");
-    lcd.print(StatusP1);
-
-    lcd.setCursor(11,1);
-    lcd.print("Pest: ");
-    lcd.print(StatusPs1);
-
-
-    if ( PercentageJarak >= 100) {
-      Serial.println ("(Torn Penuh)");
-      Serial.println ("Pompa 2 : Off");
-      Serial.println (" ");
-      digitalWrite (RelayPompa2, HIGH);
-      StatusP2 = "Off";
-      client.publish("OUT_ARRASYID_KERAN", "Off");
+    } else {
+      StatusR1 = "No";
+      if (kelembapanTanahPersen < soil_dry_threshold_percent) { // Cek berdasarkan persentase
+        digitalWrite(RelayPompa, LOW); // Nyalakan pompa
+        StatusP1 = "On";
+      } else {
+        digitalWrite(RelayPompa, HIGH); // Matikan pompa
+        StatusP1 = "Off";
       }
-
-    else if ( PercentageJarak <= 15) {
-      Serial.println ("(Torn Kosong)");
-      Serial.println ("Pompa 2 : On");
-      Serial.println (" ");
-      digitalWrite (RelayPompa2, LOW);
+    }
+    
+    // Logika Pompa 2 (Reservoir)
+    if (jarakTerkalibrasi > reservoir_kosong_cm) {
+      digitalWrite(RelayPompa2, LOW); // Nyalakan pompa isi ulang
       StatusP2 = "On";
-      client.publish("OUT_ARRASYID_KERAN", "On");
-      }
+    } else if (jarakTerkalibrasi < reservoir_penuh_cm) {
+      digitalWrite(RelayPompa2, HIGH); // Matikan jika sudah penuh
+      StatusP2 = "Off";
+    }
 
-
-    lcd.setCursor(11,3);
-    lcd.print("P2: ");
-    lcd.print(StatusP2);
+    // Logika Servo (Hama)
+    if (isMotion) {
+      StatusPs1 = "Yes";
+      ServoAktif();
+    } else {
+      StatusPs1 = "No";
+    }
     
-    snprintf (msg, MSG_BUFFER_SIZE, "%i", PercentageJarak);
-    client.publish("OUT_ARRASYID_JARAK", msg);
-  
-  }
+    // 3. Menampilkan data ke Serial Monitor & LCD
+    Serial.println("--------------------");
+    Serial.print("Suhu: "); Serial.print(t); Serial.println(" C");
+    Serial.print("Kelembapan Udara: "); Serial.print(h); Serial.println(" %");
+    Serial.print("Kelembapan Tanah: "); Serial.print(kelembapanTanahPersen, 1); Serial.println(" %");
+    Serial.print("Kondisi Hujan: "); Serial.println(StatusR1);
+    Serial.print("Status Pompa 1: "); Serial.println(StatusP1);
+    Serial.print("Jarak Reservoir: "); Serial.print(jarakTerkalibrasi, 1); Serial.println(" cm");
+    Serial.print("Status Pompa 2: "); Serial.println(StatusP2);
+    Serial.print("Deteksi Hama: "); Serial.println(StatusPs1);
+    
+    lcd.clear();
+    lcd.setCursor(0, 0); lcd.print("Suhu: "); lcd.print(t, 1); lcd.print("C");
+    lcd.setCursor(11, 0); lcd.print("Air: "); lcd.print(jarakTerkalibrasi, 0); lcd.print("cm");
+    lcd.setCursor(0, 1); lcd.print("Hum: "); lcd.print(h, 1); lcd.print("%");
+    lcd.setCursor(11, 1); lcd.print("Hama: "); lcd.print(StatusPs1);
+    lcd.setCursor(0, 2); lcd.print("Soil: "); lcd.print(kelembapanTanahPersen, 0); lcd.print("%");
+    lcd.setCursor(11, 2); lcd.print("P1: "); lcd.print(StatusP1);
+    lcd.setCursor(0, 3); lcd.print("Hujan: "); lcd.print(StatusR1);
+    lcd.setCursor(11, 3); lcd.print("P2: "); lcd.print(StatusP2);
 
-  delay(4000);
-  lcd.clear();
+    // 4. Publikasi data ke MQTT
+    char buffer[10];
+    dtostrf(t, 4, 1, buffer); client.publish("OUT_ARRASYID/SUHU/T", buffer);
+    dtostrf(h, 4, 1, buffer); client.publish("OUT_ARRASYID/SUHU/H", buffer);
+    dtostrf(kelembapanTanahPersen, 4, 1, buffer); client.publish("OUT_ARRASYID_SOIL", buffer);
+    dtostrf(jarakTerkalibrasi, 4, 1, buffer); client.publish("OUT_ARRASYID_JARAK", buffer);
+    client.publish("OUT_ARRASYID_RAIN", StatusR1.c_str());
+    client.publish("OUT_ARRASYID_PIR", StatusPs1.c_str());
+    client.publish("OUT_ARRASYID_POMPA", StatusP1.c_str());
+    client.publish("OUT_ARRASYID_KERAN", StatusP2.c_str());
+  }
 }
